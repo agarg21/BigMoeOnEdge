@@ -134,13 +134,28 @@ jobs:
           submodules: recursive
       - name: Install deps
         run: |
-          sudo apt-get update && sudo apt-get install -y cmake ninja-build
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build ccache
           python3 -m pip install --upgrade pip
           python3 -m pip install -r scripts/requirements-ci.txt
+      # llama.cpp is most of this build and rarely changes. PRs restore the cache main saved.
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/ccache
+          key: ccache-asan-${{ github.sha }}
+          restore-keys: ccache-asan-
       - name: Configure & build (ASan + UBSan)
         run: |
-          cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBMOE_SANITIZE=address,undefined
+          cmake -S . -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBMOE_SANITIZE=address,undefined \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DGGML_CCACHE=OFF
           cmake --build build-asan -j
+          ccache --show-stats
+      - name: Save compiler cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/ccache
+          key: ccache-asan-${{ github.sha }}
       - name: Byte-identity gates, sanitized
         env:
           ASAN_OPTIONS: halt_on_error=1:detect_leaks=1
@@ -164,18 +179,33 @@ jobs:
           submodules: recursive
       - name: Install deps
         run: |
-          sudo apt-get update && sudo apt-get install -y cmake ninja-build
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build ccache
           python3 -m pip install --upgrade pip
           python3 -m pip install gguf numpy
       # The runner kernel's address-space randomisation is wider than TSan's shadow layout allows,
       # and every instrumented binary then dies at start-up with "unexpected memory mapping".
       - name: Narrow ASLR for TSan
         run: sudo sysctl vm.mmap_rnd_bits=28
+      # llama.cpp is most of this build and rarely changes. PRs restore the cache main saved.
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/ccache
+          key: ccache-tsan-${{ github.sha }}
+          restore-keys: ccache-tsan-
       - name: Configure & build (TSan)
         run: |
           cmake -S . -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBMOE_SANITIZE=thread \
-            -DGGML_OPENMP=OFF
+            -DGGML_OPENMP=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DGGML_CCACHE=OFF
           cmake --build build-tsan -j
+          ccache --show-stats
+      - name: Save compiler cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/ccache
+          key: ccache-tsan-${{ github.sha }}
       - name: Threaded tests, sanitized
         env:
           TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
